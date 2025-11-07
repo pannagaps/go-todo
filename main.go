@@ -1,14 +1,12 @@
 package main
 
 import (
-	"fmt"
-	"log"
-	"net/http"
 	"os"
+	"fmt"
 	"example.com/m/controller"
+	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
-
 
 // ---- main entry ----
 func main() {
@@ -16,7 +14,7 @@ func main() {
 	// Load environment variables from .env
 	err := godotenv.Load()
 	if err != nil {
-		log.Fatal("Error loading .env file")
+		fmt.Println("Error loading .env file")
 	}
 
 	// Read values using os.Getenv
@@ -25,13 +23,15 @@ func main() {
 		port = "8080" // fallback if not set
 	}
 
-	log.SetPrefix("APP: ")
-	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+	fmt.Println("Server running on port 3000")
 
-	fmt.Println("Server running on http://localhost:3000")
-	log.Printf("Server running n port 3000")
-	http.HandleFunc("/tasks", controller.HandleTasks)
-	http.HandleFunc("/tasks/", controller.HandleTaskByID)
+	router := gin.Default()
+	router.GET("/gettask", controller.GetTasks)
+	router.POST("/createtask", controller.CreateTask)
+	router.PUT("/updatetask", controller.UpdateTask)
+	router.POST("/deletetask")
 
-	http.ListenAndServe(":"+port, nil)
+	if err := router.Run(); err != nil {
+		fmt.Printf("failed to start server:%v", err)
+	}
 }
