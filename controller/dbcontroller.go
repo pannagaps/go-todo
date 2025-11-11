@@ -3,91 +3,93 @@ package controller
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
+	"sync"
 
 	"example.com/m/models"
+	"github.com/google/uuid" // Added for UUID handling
 	"github.com/joho/godotenv"
 	"github.com/machinebox/graphql"
-
-	"sync" //implemented singlton
 )
 
-type DbConnector struct {
+type DbClient struct {
 	dbUrl     string
 	tableName string
 	client    *graphql.Client
 }
 
 // --- Singleton Variables ---
-var dbInstance *DbConnector
+var dbInstance *DbClient
 var once sync.Once
 
-func ConnectDb() *DbConnector {
+func Connect(tableName string) *DbClient {
 	err := godotenv.Load()
 	if err != nil {
-		fmt.Printf("Error loading .env file")
+		log.Fatalf("Error loading .env file: %v", err)
 	}
 	dbUrl := os.Getenv("GRAPHQL_URL")
 	client := graphql.NewClient(dbUrl)
 
 	//this guy will run only once
 	once.Do(func() {
-		fmt.Println("Creating new DBConnector instance...")
-		dbInstance = &DbConnector{
-			dbUrl:  dbUrl,
-			client: client,
+		fmt.Println("Creating new DBClient instance...")
+		dbInstance = &DbClient{
+			dbUrl:     dbUrl,
+			client:    client,
+			tableName: tableName,
 		}
 
 	})
 	return dbInstance
 }
 
-func (c *DbConnector) getTableName() string {
+func (c *DbClient) GetTableName() string {
 	return c.tableName
 }
 
-func (c *DbConnector) setTableName(tableName string) {
+func (c *DbClient) SetTableName(tableName string) {
 	c.tableName = tableName
 }
 
-func (c *DbConnector) queryDb(limit int, id ...int) ([]models.Task, error) {
+func (c *DbClient) Query(limit int, id ...uuid.UUID) ([]models.Task, error) {
 	// Define your GraphQL query
 	var query string
-	if id != nil {
-		num := id[0]
+	if len(id) > 0 {
+		uuid := id[0]
 		query = fmt.Sprintf(`
 		query MyQuery {
-			todo_%s_by_pk(id: %d) {
+			tasks_by_pk(id: "%s") {
 			id	
 			title
 			description
 			completed
 			duedate
 			}
-		}
-	`, c.tableName, num)
+		}`, uuid)
 		// Create a request
 		req := graphql.NewRequest(query)
-		// type singleResponse struct {
-		// 	Data struct {
-		// 		Task models.Task `json:"todo_tasks_by_pk"`
-		// 	} `json:"data"`
-		// }
 		type singleResponse struct {
-			TodoTasksByPk models.Task `json:"todo_tasks_by_pk"`
+			TodoTasksByPk *models.Task `json:"tasks_by_pk"` // Use a pointer to check for nil
 		}
 		var singleRes singleResponse
 
 		// Execute the query
 		if err := c.client.Run(context.Background(), req, &singleRes); err != nil {
+			log.Printf("Failed to run query for UUID %s: %v", uuid, err)
 			return nil, fmt.Errorf("failed to run query: %w", err)
 		}
 
-		return []models.Task{singleRes.TodoTasksByPk}, nil
+		// Check if the task is found
+		if singleRes.TodoTasksByPk == nil {
+			return nil, fmt.Errorf("task not found")
+		}
+
+		return []models.Task{*singleRes.TodoTasksByPk}, nil
 	} else {
 		query = fmt.Sprintf(`
 			query MyQuery {
-				todo_%s(limit: %d) {
+				tasks(limit: %d) {
 				id	
 				title
 				description
@@ -95,83 +97,91 @@ func (c *DbConnector) queryDb(limit int, id ...int) ([]models.Task, error) {
 				duedate
 				}
 			}
-		`, c.tableName, limit)
+		`, limit)
 
 		// Create a request
 		req := graphql.NewRequest(query)
-		var response map[string][]models.Task
+		type tasksResponse struct {
+			Tasks []models.Task `json:"tasks"`
+		}
+		var response tasksResponse
 
 		// Execute the query
 		if err := c.client.Run(context.Background(), req, &response); err != nil {
+			fmt.Printf("Failed to run query with limit %d: %v", limit, err)
 			return nil, fmt.Errorf("failed to run query: %w", err)
 		}
-		keys := fmt.Sprintf("todo_%s", c.tableName)
-		return response[keys], nil
+
+		return response.Tasks, nil
 	}
 }
 
-func (c *DbConnector) insertDb(task models.Task) (response string, error error) {
-	fmt.Println(task)
+func (c *DbClient) Insert(task models.Task) (response string, error error) {
+	// Generate a new UUID for the task
+	newUUID := uuid.New()
+	task.Id = newUUID
+
+	fmt.Printf("Generated UUID for new task: %s\n", newUUID)
+
 	// Define your GraphQL mutation
 	mutation := fmt.Sprintf(`
 		mutation MyMutation {
-			insert_todo_%s_one(object: {title: "%s", description: "%s", completed: %t, duedate: "%s"}) {
+			insert_tasks_one(object: {id: "%s", title: "%s", description: "%s", completed: %t, duedate: "%s"}) {
 			id
 			}
 		}
-	`, c.tableName, task.Title, task.Description, task.Completed, task.Duedate)
+	`, task.Id, task.Title, task.Description, task.Completed, task.Duedate)
 
 	// Create a request
 	req := graphql.NewRequest(mutation)
 
-	// var response map[string]map[string]models.Task
 	var insertresponse struct {
 		Insert struct {
-			ID int `json:"id"`
-		} `json:"insert_todo_tasks_one"`
+			ID uuid.UUID `json:"id"`
+		} `json:"insert_tasks_one"`
 	}
 
 	// Execute the mutation
 	if err := c.client.Run(context.Background(), req, &insertresponse); err != nil {
+		log.Printf("Failed to run mutation: %v", err)
 		return "", fmt.Errorf("failed to run mutation %w", err)
 	}
-	return "Insert successful", nil
+	return fmt.Sprint("Insert successful:", newUUID), nil
 }
 
-func (c *DbConnector) updateDb(id int, task models.Task) (response string, error error) {
-	// Define your GraphQL mutation
+func (c *DbClient) Update(id uuid.UUID, task models.Task) (response string, error error) {
 	mutation := fmt.Sprintf(`
 		mutation MyMutation {
-			update_todo_%s_by_pk(pk_columns: {id: %d}, _set: {title: "%s", description: "%s", completed: %t, duedate: "%s"}) {
+			update_tasks_by_pk(pk_columns: {id: "%s"}, _set: {title: "%s", description: "%s", completed: %t, duedate: "%s"}) {
 			id
 			}
 		}
-	`, c.tableName, id, task.Title, task.Description, task.Completed, task.Duedate)
+	`, id, task.Title, task.Description, task.Completed, task.Duedate)
 
 	// Create a request
 	req := graphql.NewRequest(mutation)
 
 	var Updateresponse struct {
 		Insert struct {
-			ID int `json:"id"`
+			ID uuid.UUID `json:"id"`
 		} `json:"insert_todo_tasks_one"`
 	}
 	// Execute the mutation
 	if err := c.client.Run(context.Background(), req, &Updateresponse); err != nil {
+		log.Printf("Failed to update task with UUID %s: %v", id, err)
 		return "", fmt.Errorf("failed to run mutation %w", err)
 	}
-	return "Update successful", nil
+	return fmt.Sprint("Update successful:", id), nil
 }
 
-func (c *DbConnector) deleteDb(id int) (response string, error error) {
-	// Define your GraphQL mutation
+func (c *DbClient) Delete(id uuid.UUID) (response string, error error) {
 	mutation := fmt.Sprintf(`
 		mutation MyMutation {
-			delete_todo_%s_by_pk(id: %d) {
+			delete_tasks_by_pk(id: "%s") {
 			id
 			}
 		}
-	`, c.tableName, id)
+	`, id)
 
 	// Create a request
 	req := graphql.NewRequest(mutation)
@@ -179,15 +189,13 @@ func (c *DbConnector) deleteDb(id int) (response string, error error) {
 	fmt.Println(mutation)
 	var deleteresponse struct {
 		Insert struct {
-			ID int `json:"id"`
+			ID uuid.UUID `json:"id"`
 		} `json:"delete_todo_tasks_one"`
 	}
 	// Execute the mutation
 	if err := c.client.Run(context.Background(), req, &deleteresponse); err != nil {
-		fmt.Printf("failed to delete:%w", err)
+		log.Printf("Failed to delete task with UUID %s: %v", id, err)
 		return "", fmt.Errorf("failed to delete:%w", err)
-
 	}
-	return "Delete successful", nil
-
+	return fmt.Sprint("Delete successful:", id), nil
 }

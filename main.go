@@ -1,8 +1,8 @@
 package main
 
 import (
-	"os"
 	"fmt"
+	"os"
 	"example.com/m/controller"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -26,10 +26,10 @@ func main() {
 	fmt.Println("Server running on port 3000")
 
 	router := gin.Default()
-	router.GET("/gettask", controller.GetTasks)
-	router.POST("/createtask", controller.CreateTask)
-	router.PUT("/updatetask", controller.UpdateTask)
-	router.POST("/deletetask")
+	router.GET("/tasks", controller.GetTasks)
+	router.POST("/tasks/create", controller.CreateTask)
+	router.PATCH("/tasks", controller.UpdateTask)
+	router.DELETE("/tasks", controller.DeleteTask)
 
 	if err := router.Run(); err != nil {
 		fmt.Printf("failed to start server:%v", err)

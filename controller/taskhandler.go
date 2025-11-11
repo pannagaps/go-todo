@@ -3,123 +3,153 @@ package controller
 import (
 	"fmt"
 	"net/http"
+
 	"example.com/m/models"
 	"github.com/gin-gonic/gin"
-	"strconv"
-
+	"github.com/google/uuid" // Added for UUID handling
 )
 
 // create a db connection
-var dbConn = ConnectDb()
+var dbConn = Connect("tasks")
+
 // dbConn.setTableName("tasks")
 
 // ---- CRUD Logic ----
 func GetTasks(c *gin.Context) {
-	dbConn.setTableName("tasks")
-
-	// Sort tasks by created time (newest first)
-	var Tasks []models.Task
+	// Initialize variables
+	var tasks []models.Task
 	var err error
 
-	id:=c.Query("id")
-	limit:=50
+	// Read the optional `id` query parameter
+	id := c.Query("id")
+	limit := 50
+
 	if id != "" {
-		num, err := strconv.Atoi(id)
+		// Parse the `id` into a UUID
+		parsedID, err := uuid.Parse(id)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid UUID format"})
 			return
 		}
-		// Fetch by ID
-		Tasks, err = dbConn.queryDb(limit, num)
+
+		// Fetch the task by ID
+		tasks, err = dbConn.Query(limit, parsedID)
 		if err != nil {
-			fmt.Printf("Error fetching tasks: %v", err)
-			c.JSON(http.StatusInternalServerError, "Failed to fetch tasks")
+			if err.Error() == "task not found" {
+				c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
+			} else {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"status": "error",
+					"error":  fmt.Sprintf("Error fetching task: %v", err),
+				})
+			}
 			return
 		}
-		c.JSON(http.StatusOK,Tasks)
+
+		// Return the task
+		c.JSON(http.StatusOK, gin.H{
+			"status": "success",
+			"data":   tasks,
+		})
 	} else {
-		// Fetch without ID (e.g., get all)
-		Tasks, err = dbConn.queryDb(limit) // Or modify queryDb to allow nil / no id
+		// Fetch all tasks if `id` is not provided
+		tasks, err = dbConn.Query(limit)
 		if err != nil {
-			fmt.Printf("Error fetching tasks: %v", err)
-			c.JSON(http.StatusInternalServerError, "Failed to fetch tasks")
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"status": "error",
+				"error":  fmt.Sprintf("Error fetching tasks: %v", err),
+			})
 			return
 		}
-		c.JSON(http.StatusOK,Tasks)
+
+		// Return the list of tasks
+		c.JSON(http.StatusOK, gin.H{
+			"status": "success",
+			"data":   tasks,
+		})
 	}
-	
 }
 
 func CreateTask(c *gin.Context) {
-	dbConn.setTableName("tasks")
 	var newTask models.Task
 	// Bind JSON from request body to struct
-		if err := c.BindJSON(&newTask); err != nil {
+	if err := c.BindJSON(&newTask); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	res, err := dbConn.Insert(newTask)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"status": "error",
+			"error":  fmt.Sprintf("Error creating tasks: %v", err),
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"status": "success",
+		"data":   res,
+	})
+}
+
+func UpdateTask(c *gin.Context) {
+	var updated models.Task
+	id := c.Query("id")
+	if id != "" {
+		parsedID, err := uuid.Parse(id) // Parse string to UUID
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid UUID format"})
+			return
+		}
+		// Bind JSON from request body to struct
+		if err := c.BindJSON(&updated); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-	res, err := dbConn.insertDb(newTask)
-	if err != nil {
-		fmt.Printf("Error creating tasks: %v", err)
-		c.JSON(http.StatusInternalServerError,"Error Creating tasks")
+		res, err := dbConn.Update(parsedID, updated)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"status": "error",
+				"error":  fmt.Sprintf("Error updating tasks: %v", err),
+			})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"status": "success",
+			"data":   res,
+		})
 		return
-	}
-	c.JSON(http.StatusOK,res)
-	}
-
-func UpdateTask(c *gin.Context) {
-	dbConn.setTableName("tasks")
-	var updated models.Task
-	id :=c.Query("id")
-	if id!=""{
-			num, err := strconv.Atoi(id) // Convert string to integer
-			if err!=nil{
-				fmt.Print("error")
-				c.JSON(http.StatusInternalServerError,gin.H{"error":err.Error()})
-				return
-			}
-			// Bind JSON from request body to struct
-			if err := c.BindJSON(&updated); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-				return
-			}
-			res, err := dbConn.updateDb(num, updated)
-			if err != nil {
-				fmt.Printf("Error updating tasks: %v", err)
-				c.JSON(http.StatusInternalServerError,"Error Updating Task")
-				return
-			}
-			c.JSON(http.StatusOK,res)
-			return
-	}else{
-			c.JSON(http.StatusBadRequest,gin.H{"error":"id is Required"})
-			return
+	} else {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "id is Required"})
+		return
 
 	}
 	// http.Error(w, "Task not found", http.StatusNotFound)
 }
 
 func DeleteTask(c *gin.Context) {
-	dbConn.setTableName("tasks")
-	id :=c.Query("id")
-	if id!=""{
-			num, err := strconv.Atoi(id) // Convert string to integer
-			if err!=nil{
-				fmt.Print("error")
-				c.JSON(http.StatusInternalServerError,gin.H{"error":err.Error()})
-				return
-			}
-			res, err := dbConn.deleteDb(num)
-			if err != nil {
-				fmt.Printf("Error deleting tasks: %v", err)
-				c.JSON(http.StatusInternalServerError,"Error Updating Task")
-				return
-			}
-			c.JSON(http.StatusOK,res)
+	id := c.Query("id")
+	if id != "" {
+		parsedID, err := uuid.Parse(id) // Parse string to UUID
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid UUID format"})
 			return
-	}else{
-			c.JSON(http.StatusBadRequest,gin.H{"error":"id is Required"})
+		}
+		res, err := dbConn.Delete(parsedID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"status": "error",
+				"error":  fmt.Sprintf("Error deleting tasks: %v", err),
+			})
 			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"status": "success",
+			"data":   res,
+		})
+		return
+	} else {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "id is Required"})
+		return
 
 	}
 }
